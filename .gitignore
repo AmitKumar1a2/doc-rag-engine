@@ -1,3 +1,4 @@
 # Ignore Python virtual environment
 rag_env/
 rag_env311/
+src/__pycache__/
