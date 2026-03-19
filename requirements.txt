@@ -1,7 +1,8 @@
 langchain
 langchain-community
-langchain-openai
+langchain-ollama
 faiss-cpu
 pypdf
 python-dotenv
+langchain-text-splitters
 tqdm
