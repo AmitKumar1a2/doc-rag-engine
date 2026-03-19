@@ -1,0 +1,5 @@
+# Ignore Python virtual environment
+rag_env/
+data/
+src/
+vector_store/

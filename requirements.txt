@@ -1,0 +1,7 @@
+langchain
+langchain-community
+langchain-openai
+faiss-cpu
+pypdf
+python-dotenv
+tqdm
