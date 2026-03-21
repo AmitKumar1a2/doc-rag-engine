@@ -23,7 +23,7 @@ def main():
             print("\nCitations:")
             sources = result.get("sources", {})
             if not sources:
-                print("(none)")
+                print("(No Citations found in the documents, Please refine your question.)")
             else:
                 for citation_id, (source, page) in sources.items():
                     print(f"[{citation_id}] {source} | page {page}")

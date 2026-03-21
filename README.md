@@ -146,3 +146,7 @@ Type your question and use `exit` or `quit` to stop.
 - Rebuild vector store whenever source PDFs change
 - Keep Ollama running while indexing/chatting
 - Tune chunk size or score threshold to balance recall and precision
+
+
+## Learnings
+See [RAG Challenges & Solutions](docs/RAG_Challenges_and_Solutions.md)
