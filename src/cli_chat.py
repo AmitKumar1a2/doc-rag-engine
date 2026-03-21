@@ -20,11 +20,13 @@ def main():
             print("\nAssistant:")
             print(result["answer"])
 
-            print("\nTop Sources:")
-            for i, doc in enumerate(result["sources"], start=1):
-                source = doc.metadata.get("source_file", "unknown")
-                page = doc.metadata.get("page", "unknown")
-                print(f"{i}. {source} | page {page}")
+            print("\nCitations:")
+            sources = result.get("sources", {})
+            if not sources:
+                print("(none)")
+            else:
+                for citation_id, (source, page) in sources.items():
+                    print(f"[{citation_id}] {source} | page {page}")
 
             print("\n" + "-" * 60 + "\n")
 
