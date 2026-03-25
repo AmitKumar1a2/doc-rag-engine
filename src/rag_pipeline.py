@@ -85,6 +85,30 @@ User message:
 Answer:
 """.strip()
 
+RERANK_PROMPT_TEMPLATE = """
+You are a document reranker for factual question answering.
+
+Task:
+Rank the candidate passages from best to worst for answering the user's question.
+
+Rules:
+1. Prioritize passages that directly answer the question.
+2. Prefer precise factual evidence over broad background.
+3. Use only the candidate passages provided.
+4. Return valid JSON only.
+
+Return this schema exactly:
+{{
+  "ranked_ids": [3, 1, 2]
+}}
+
+Question:
+{question}
+
+Candidate passages:
+{candidates}
+""".strip()
+
 
 def _safe_json_load(text: str) -> dict[str, Any] | None:
     text = text.strip()
@@ -215,6 +239,22 @@ def format_context(docs: list[Document]) -> str:
     return "\n\n".join(formatted_parts)
 
 
+def format_rerank_candidates(docs: list[Document]) -> str:
+    candidate_parts: list[str] = []
+
+    for i, doc in enumerate(docs, start=1):
+        source = doc.metadata.get("source_file", "unknown")
+        page = doc.metadata.get("page", "unknown")
+        content = doc.page_content.strip()
+        truncated_content = content[:900]
+
+        candidate_parts.append(
+            f"[{i}] Source: {source} | Page: {page}\n{truncated_content}"
+        )
+
+    return "\n\n".join(candidate_parts)
+
+
 def filter_by_score(
     docs_with_scores: list[tuple[Document, float]],
     score_threshold: float,
@@ -243,6 +283,60 @@ def validate_citations(answer: str, sources: dict[int, tuple[str, int | str]]) -
 
     valid_numbers = set(sources.keys())
     return cited_numbers.issubset(valid_numbers)
+
+
+def rerank_fact_candidates(
+    question: str,
+    docs: list[Document],
+    *,
+    final_k: int,
+) -> list[Document]:
+    if len(docs) <= 1:
+        return docs[:final_k]
+
+    reranker_llm = ChatOllama(model="phi3:mini", temperature=0)
+    prompt = RERANK_PROMPT_TEMPLATE.format(
+        question=question,
+        candidates=format_rerank_candidates(docs),
+    )
+
+    try:
+        raw_response = reranker_llm.invoke(prompt).content
+        payload = _safe_json_load(raw_response)
+        if payload is None:
+            return docs[:final_k]
+
+        ranked_ids = payload.get("ranked_ids")
+        if not isinstance(ranked_ids, list):
+            return docs[:final_k]
+
+        ranked_docs: list[Document] = []
+        seen_ids: set[int] = set()
+        for candidate_id in ranked_ids:
+            if not isinstance(candidate_id, int):
+                continue
+            if candidate_id < 1 or candidate_id > len(docs):
+                continue
+            if candidate_id in seen_ids:
+                continue
+
+            ranked_docs.append(docs[candidate_id - 1])
+            seen_ids.add(candidate_id)
+
+            if len(ranked_docs) >= final_k:
+                return ranked_docs
+
+        if ranked_docs:
+            for i, doc in enumerate(docs, start=1):
+                if i not in seen_ids:
+                    ranked_docs.append(doc)
+                if len(ranked_docs) >= final_k:
+                    break
+            return ranked_docs
+    except Exception:
+        return docs[:final_k]
+
+    return docs[:final_k]
 
 
 def retrieve_by_similarity(
@@ -329,10 +423,15 @@ def ask_question(question: str) -> dict[str, Any]:
         }
 
     if query_type == "FACT_LOOKUP":
-        retrieved_docs = retrieve_by_similarity(
+        candidate_docs = retrieve_by_similarity(
             question,
-            k=4,
-            score_threshold=1.2,
+            k=12,
+            score_threshold=1.4,
+        )
+        retrieved_docs = rerank_fact_candidates(
+            question,
+            candidate_docs,
+            final_k=4,
         )
         result = answer_with_retrieval(
             question,

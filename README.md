@@ -25,10 +25,12 @@ The pipeline was upgraded with minimal, production-style changes:
 - Query routing for `CONVERSATION`, `FACT_LOOKUP`, and `SUMMARY`
 - Citation-aware answers enforced via prompt (`[1]`, `[2]`, ...)
 - Retrieval confidence filtering using `similarity_search_with_score`
+- LLM-based reranking for fact lookup to improve final chunk precision
 - MMR-based retrieval for summary questions to improve context diversity
 - No-answer fallback when retrieval quality is weak
 - Structured source mapping in output
 - CLI updated to print routing metadata and citation mappings clearly
+- Streamlit UI added for PDF upload, querying, and answer history
 
 ## System Architecture
 
@@ -40,7 +42,7 @@ Query time:
 Question -> Query Router -> Route-Specific Retrieval / Conversation -> Prompt With Context -> LLM
 
 Retrieval routes:
-- `FACT_LOOKUP` -> Similarity Search With Score -> Threshold Filter
+- `FACT_LOOKUP` -> Similarity Search With Score -> Threshold Filter -> LLM Reranking
 - `SUMMARY` -> MMR Retrieval (`fetch_k` candidate pool -> diversified `k` results)
 - `CONVERSATION` -> No retrieval
 ```
@@ -70,6 +72,7 @@ doc-rag-engine/
 |   |-- retriever.py                  # FAISS build/load
 |   |-- rag_pipeline.py               # Query routing + retrieval + prompt + answer generation
 |   `-- cli_chat.py                   # Interactive CLI
+|-- streamlit_app.py                  # Streamlit UI for upload + query + history
 |-- AGENTS.md                         # Repo-specific agent workflow instructions
 |-- requirements.txt                  # Python dependencies
 `-- README.md
@@ -90,7 +93,7 @@ doc-rag-engine/
 
 ### `src/rag_pipeline.py`
 - Classifies queries into `CONVERSATION`, `FACT_LOOKUP`, or `SUMMARY`
-- Uses score-filtered similarity search for factual lookup
+- Uses score-filtered similarity search plus reranking for factual lookup
 - Uses MMR retrieval for summary-style questions
 - Enforces route-specific prompt behavior and citation validation
 - Returns structured output:
@@ -118,6 +121,12 @@ doc-rag-engine/
 - Displays assistant answer
 - Displays citations as `[id] file | page`
 - Shows route-aware citation output for retrieval vs conversation mode
+
+### `streamlit_app.py`
+- Provides a browser UI for PDF upload and question entry
+- Rebuilds the vector store from uploaded PDFs
+- Shows a scrollable answer history with route metadata
+- Displays citations and sources for each response
 
 ## Prerequisites
 
@@ -157,6 +166,12 @@ python src\cli_chat.py
 
 Type your question and use `exit` or `quit` to stop.
 
+### 3) Start Streamlit UI
+
+```powershell
+python -m streamlit run streamlit_app.py
+```
+
 ## Typical Workflow
 
 1. Add or update PDFs in `data/`
@@ -169,7 +184,9 @@ Type your question and use `exit` or `quit` to stop.
 - Keep Ollama running while indexing/chatting
 - Tune chunk size or score threshold to balance recall and precision
 - `phi3:mini` is used for query classification
+- `phi3:mini` is also used for fact-lookup reranking
 - `llama3.2:3b` is used for answer generation
+- Fact lookup uses reranking after initial similarity retrieval
 - Summary queries use MMR retrieval with diversified chunk selection
 
 
