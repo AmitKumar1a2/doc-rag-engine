@@ -42,3 +42,22 @@ Do not trigger the knowledge base update when:
 - Prefer repo-specific discussion over generic theory, unless the theory was part of the session and helpful to preserve.
 - If there was little or no substantive discussion before the trigger event, create a short note with the decisions taken during the implementation itself.
 - Do not create a knowledge base entry for trivial one-line exchanges that do not add lasting value.
+
+
+## Git Push Rule
+
+When the user asks to push code to git, follow this workflow before pushing:
+
+1. Review whether the code changes introduced a meaningful logic, behavior, architecture, dependency, workflow, or user-facing output change.
+2. If yes, update `README.md` so it reflects the current project behavior.
+3. Do not update `README.md` for tiny fixes such as syntax-only edits, formatting changes, comments, or other small non-behavioral changes.
+4. After the README review/update, stage the required files with `git add`.
+5. Commit the changes before pushing.
+6. Then push to the remote.
+
+
+## Git Push Guidance
+
+- Treat README updates as required when the implementation changes what the system does, how it is used, what dependencies it needs, or what outputs/users should expect.
+- Keep README edits minimal and targeted to the actual change.
+- Avoid rewriting unrelated sections of the README during this workflow.
