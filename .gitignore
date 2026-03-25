@@ -1,4 +1,6 @@
 # Ignore Python virtual environment
 rag_env/
 rag_env311/
-src/__pycache__/
+__pycache__/
+*.pyc
+AGENTS.md
