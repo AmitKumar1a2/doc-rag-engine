@@ -285,6 +285,22 @@ def validate_citations(answer: str, sources: dict[int, tuple[str, int | str]]) -
     return cited_numbers.issubset(valid_numbers)
 
 
+def filter_sources_to_citations(
+    answer: str,
+    sources: dict[int, tuple[str, int | str]],
+) -> dict[int, tuple[str, int | str]]:
+    cited_numbers = []
+    seen_numbers: set[int] = set()
+
+    for match in re.findall(r"\[(\d+)\]", answer):
+        citation_id = int(match)
+        if citation_id in sources and citation_id not in seen_numbers:
+            cited_numbers.append(citation_id)
+            seen_numbers.add(citation_id)
+
+    return {citation_id: sources[citation_id] for citation_id in cited_numbers}
+
+
 def rerank_fact_candidates(
     question: str,
     docs: list[Document],
@@ -401,9 +417,11 @@ def answer_with_retrieval(
                 "sources": {},
             }
 
+    cited_sources = filter_sources_to_citations(answer, sources)
+
     return {
         "answer": answer,
-        "sources": sources,
+        "sources": cited_sources,
     }
 
 
