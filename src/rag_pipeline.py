@@ -1,5 +1,8 @@
 import json
+import logging
+import os
 import re
+import time
 from typing import Any
 
 from langchain_core.documents import Document
@@ -12,9 +15,17 @@ from model_config import (
 )
 from retriever import load_vector_store
 
+logger = logging.getLogger("rag_pipeline")
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
 NO_ANSWER_MESSAGE = "I could not find relevant information in the provided documents."
 
 QUERY_TYPES = {"CONVERSATION", "FACT_LOOKUP", "SUMMARY"}
+FACT_FINAL_K = 4
 
 CLASSIFIER_PROMPT = """
 You are a query router for a document assistant.
@@ -94,17 +105,18 @@ RERANK_PROMPT_TEMPLATE = """
 You are a document reranker for factual question answering.
 
 Task:
-Rank the candidate passages from best to worst for answering the user's question.
+Select the best candidate passage IDs for answering the user's question.
 
 Rules:
 1. Prioritize passages that directly answer the question.
 2. Prefer precise factual evidence over broad background.
 3. Use only the candidate passages provided.
-4. Return valid JSON only.
+4. Return valid JSON only with no extra text.
+5. Return exactly {top_k} IDs in best-to-worst order.
 
 Return this schema exactly:
 {{
-  "ranked_ids": [3, 1, 2]
+  "top_ids": [3, 1, 2]
 }}
 
 Question:
@@ -274,6 +286,56 @@ def filter_by_score(
     return filtered_docs
 
 
+def filter_with_scores(
+    docs_with_scores: list[tuple[Document, float]],
+    score_threshold: float,
+) -> list[tuple[Document, float]]:
+    # FAISS score is a distance metric in this setup (lower is better).
+    filtered: list[tuple[Document, float]] = []
+    for doc, score in docs_with_scores:
+        if score <= score_threshold:
+            filtered.append((doc, score))
+    return filtered
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+# Adaptive reranking logic to skip reranking when initial retrieval is confident and fast mode is enabled
+def should_skip_rerank(
+    filtered_docs_with_scores: list[tuple[Document, float]],
+    *,
+    final_k: int,
+    fast_mode_enabled: bool,
+    confident_gap_threshold: float,
+) -> tuple[bool, str]:
+    if not fast_mode_enabled:
+        return False, "fast_mode_disabled"
+
+    if len(filtered_docs_with_scores) <= 1:
+        return True, "single_candidate"
+
+    if len(filtered_docs_with_scores) <= final_k:
+        return True, "already_small_candidate_set"
+
+    top_score = filtered_docs_with_scores[0][1]
+    next_score = filtered_docs_with_scores[1][1]
+    score_gap = next_score - top_score
+    if score_gap >= confident_gap_threshold:
+        return True, "strong_top_hit"
+
+    return False, "needs_rerank"
+
+
 def build_sources_map(docs: list[Document]) -> dict[int, tuple[str, int | str]]:
     sources: dict[int, tuple[str, int | str]] = {}
     for i, doc in enumerate(docs, start=1):
@@ -320,6 +382,7 @@ def rerank_fact_candidates(
     prompt = RERANK_PROMPT_TEMPLATE.format(
         question=question,
         candidates=format_rerank_candidates(docs),
+        top_k=final_k,
     )
 
     try:
@@ -328,13 +391,16 @@ def rerank_fact_candidates(
         if payload is None:
             return docs[:final_k]
 
-        ranked_ids = payload.get("ranked_ids")
-        if not isinstance(ranked_ids, list):
+        top_ids = payload.get("top_ids")
+        if not isinstance(top_ids, list):
+            legacy_ids = payload.get("ranked_ids")
+            top_ids = legacy_ids if isinstance(legacy_ids, list) else None
+        if not isinstance(top_ids, list):
             return docs[:final_k]
 
         ranked_docs: list[Document] = []
         seen_ids: set[int] = set()
-        for candidate_id in ranked_ids:
+        for candidate_id in top_ids:
             if not isinstance(candidate_id, int):
                 continue
             if candidate_id < 1 or candidate_id > len(docs):
@@ -429,12 +495,19 @@ def answer_with_retrieval(
 
 
 def ask_question(question: str) -> dict[str, Any]:
+    overall_start = time.perf_counter()
+    routing_start = overall_start
     routing = classify_query(question)
+    routing_time = time.perf_counter() - routing_start
     query_type = routing["query_type"]
+    logger.info("routing took %.3fs -> %s", routing_time, query_type)
 
     if query_type == "CONVERSATION":
+        conv_start = time.perf_counter()
         prompt = CONVERSATION_PROMPT_TEMPLATE.format(question=question)
         response = get_conversation_llm().invoke(prompt)
+        logger.info("conversation route in %.3fs", time.perf_counter() - conv_start)
+        logger.info("overall latency %.3fs", time.perf_counter() - overall_start)
         return {
             "answer": response.content.strip(),
             "sources": {},
@@ -443,36 +516,80 @@ def ask_question(question: str) -> dict[str, Any]:
         }
 
     if query_type == "FACT_LOOKUP":
-        candidate_docs = retrieve_by_similarity(
-            question,
-            k=12,
+        retrieval_start = time.perf_counter()
+        docs_with_scores = VECTOR_STORE.similarity_search_with_score(question, k=8) # updating this to 8 to reduce latency and since we have a reranker step, we can be more aggressive with initial retrieval--
+        filtered_docs_with_scores = filter_with_scores(
+            docs_with_scores,
             score_threshold=1.4,
         )
-        retrieved_docs = rerank_fact_candidates(
-            question,
-            candidate_docs,
-            final_k=4,
+        candidate_docs = [doc for doc, _ in filtered_docs_with_scores]
+        logger.info(
+            "fact retrieval (similarity) in %.3fs, candidates=%d",
+            time.perf_counter() - retrieval_start,
+            len(candidate_docs),
         )
+
+        fast_mode_enabled = _get_bool_env("RAG_FACT_FAST_MODE", False)
+        confident_gap_threshold = float(os.getenv("RAG_RERANK_GAP_THRESHOLD", "0.12"))
+        skip_rerank, skip_reason = should_skip_rerank(
+            filtered_docs_with_scores,
+            final_k=FACT_FINAL_K,
+            fast_mode_enabled=fast_mode_enabled,
+            confident_gap_threshold=confident_gap_threshold,
+        )
+
+        if skip_rerank:
+            retrieved_docs = candidate_docs[:FACT_FINAL_K]
+            logger.info(
+                "rerank skipped (%s), selected top-%d directly",
+                skip_reason,
+                len(retrieved_docs),
+            )
+        else:
+            rerank_start = time.perf_counter()
+            retrieved_docs = rerank_fact_candidates(
+                question,
+                candidate_docs,
+                final_k=FACT_FINAL_K,
+            )
+            logger.info(
+                "rerank step in %.3fs, final_k=%d",
+                time.perf_counter() - rerank_start,
+                len(retrieved_docs),
+            )
+
+        answer_start = time.perf_counter()
         result = answer_with_retrieval(
             question,
             retrieved_docs=retrieved_docs,
             prompt_template=FACT_PROMPT_TEMPLATE,
             strict_citation=True,
         )
+        logger.info("answer step in %.3fs", time.perf_counter() - answer_start)
     else:  # SUMMARY
+        retrieval_start = time.perf_counter()
         retrieved_docs = retrieve_by_mmr(
             question,
             k=8,
             fetch_k=20,
             lambda_mult=0.5,
         )
+        logger.info(
+            "summary retrieval (MMR) in %.3fs, docs=%d",
+            time.perf_counter() - retrieval_start,
+            len(retrieved_docs),
+        )
+
+        answer_start = time.perf_counter()
         result = answer_with_retrieval(
             question,
             retrieved_docs=retrieved_docs,
             prompt_template=SUMMARY_PROMPT_TEMPLATE,
             strict_citation=False,
         )
+        logger.info("answer step in %.3fs", time.perf_counter() - answer_start)
 
     result["query_type"] = query_type
     result["routing"] = routing
+    logger.info("overall latency %.3fs", time.perf_counter() - overall_start)
     return result

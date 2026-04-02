@@ -170,12 +170,11 @@ $env:RAG_CLASSIFIER_TEMPERATURE = "0"
 
 $env:RAG_RERANKER_MODEL = "phi3:mini"
 $env:RAG_RERANKER_TEMPERATURE = "0"
+$env:RAG_RERANKER_MAX_TOKENS = "24"
 
 $env:RAG_ANSWER_MODEL = "llama3.2:3b"
 $env:RAG_ANSWER_TEMPERATURE = "0"
 
-$env:RAG_CONVERSATION_MODEL = "llama3.2:3b"
-$env:RAG_CONVERSATION_TEMPERATURE = "0.2"
 ```
 
 You can also place the same keys in a local `.env` file.
@@ -183,6 +182,8 @@ You can also place the same keys in a local `.env` file.
 Important:
 - If you change `RAG_EMBEDDING_MODEL`, rebuild the FAISS index with `python src\retriever.py`
 - For low-latency experiments, try smaller models at `RAG_CLASSIFIER_MODEL`, `RAG_RERANKER_MODEL`, or `RAG_ANSWER_MODEL` independently
+- `RAG_FACT_FAST_MODE` (`true`/`false`, default `true`) to skip reranking when retrieval is already confident
+- `RAG_RERANK_GAP_THRESHOLD` (default `0.12`) to control how strong top-hit confidence must be before rerank is skipped
 
 ## How To Use
 
@@ -220,9 +221,10 @@ python -m streamlit run streamlit_app.py
 - Tune chunk size or score threshold to balance recall and precision
 - Default query classification model: `phi3:mini`
 - Default fact reranking model: `phi3:mini`
-- Default answer and conversation model: `llama3.2:3b`
+- Default answer & conversation model: `llama3.2:3b` (one model instance shared)
 - Default embedding model: `nomic-embed-text`
 - Fact lookup uses reranking after initial similarity retrieval
+- Adaptive fact rerank fast-mode can skip reranking when top retrieval confidence is strong (`RAG_FACT_FAST_MODE`)
 - Summary queries use MMR retrieval with diversified chunk selection
 
 

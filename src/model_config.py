@@ -12,6 +12,7 @@ load_dotenv()
 class ChatModelConfig:
     model: str
     temperature: float
+    num_predict: int | None = None
 
 
 def _get_env_str(name: str, default: str) -> str:
@@ -26,6 +27,17 @@ def _get_env_float(name: str, default: float) -> float:
 
     try:
         return float(raw_value)
+    except ValueError:
+        return default
+
+
+def _get_env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+
+    try:
+        return int(raw_value)
     except ValueError:
         return default
 
@@ -45,25 +57,25 @@ def get_reranker_model_config() -> ChatModelConfig:
     return ChatModelConfig(
         model=_get_env_str("RAG_RERANKER_MODEL", "phi3:mini"),
         temperature=_get_env_float("RAG_RERANKER_TEMPERATURE", 0.0),
+        num_predict=_get_env_int("RAG_RERANKER_MAX_TOKENS", 24),
     )
 
 
 def get_answer_model_config() -> ChatModelConfig:
     return ChatModelConfig(
-        model=_get_env_str("RAG_ANSWER_MODEL", "llama3.2:3b"),
+        model=_get_env_str("RAG_ANSWER_MODEL", 'phi3:mini'),#"llama3.2:3b"),
         temperature=_get_env_float("RAG_ANSWER_TEMPERATURE", 0.0),
     )
 
 
-def get_conversation_model_config() -> ChatModelConfig:
-    return ChatModelConfig(
-        model=_get_env_str("RAG_CONVERSATION_MODEL", "llama3.2:3b"),
-        temperature=_get_env_float("RAG_CONVERSATION_TEMPERATURE", 0.2),
-    )
-
-
 def create_chat_llm(config: ChatModelConfig) -> ChatOllama:
-    return ChatOllama(model=config.model, temperature=config.temperature)
+    params: dict[str, object] = {
+        "model": config.model,
+        "temperature": config.temperature,
+    }
+    if config.num_predict is not None:
+        params["num_predict"] = config.num_predict
+    return ChatOllama(**params)
 
 
 @lru_cache(maxsize=1)
@@ -83,7 +95,7 @@ def get_answer_llm() -> ChatOllama:
 
 @lru_cache(maxsize=1)
 def get_conversation_llm() -> ChatOllama:
-    return create_chat_llm(get_conversation_model_config())
+    return get_answer_llm()
 
 
 @lru_cache(maxsize=1)
