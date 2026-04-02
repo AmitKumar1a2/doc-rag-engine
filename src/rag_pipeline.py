@@ -3,8 +3,13 @@ import re
 from typing import Any
 
 from langchain_core.documents import Document
-from langchain_ollama import ChatOllama
 
+from model_config import (
+    get_answer_llm,
+    get_classifier_llm,
+    get_conversation_llm,
+    get_reranker_llm,
+)
 from retriever import load_vector_store
 
 NO_ANSWER_MESSAGE = "I could not find relevant information in the provided documents."
@@ -110,6 +115,9 @@ Candidate passages:
 """.strip()
 
 
+VECTOR_STORE = load_vector_store()
+
+
 def _safe_json_load(text: str) -> dict[str, Any] | None:
     text = text.strip()
 
@@ -207,11 +215,10 @@ def classify_query_rule_based(question: str) -> dict[str, Any]:
 
 
 def classify_query(question: str) -> dict[str, Any]:
-    classifier_llm = ChatOllama(model="phi3:mini", temperature=0)
     prompt = CLASSIFIER_PROMPT.format(question=question)
 
     try:
-        raw_response = classifier_llm.invoke(prompt).content
+        raw_response = get_classifier_llm().invoke(prompt).content
         payload = _safe_json_load(raw_response)
         if payload is None:
             return classify_query_rule_based(question)
@@ -310,14 +317,13 @@ def rerank_fact_candidates(
     if len(docs) <= 1:
         return docs[:final_k]
 
-    reranker_llm = ChatOllama(model="phi3:mini", temperature=0)
     prompt = RERANK_PROMPT_TEMPLATE.format(
         question=question,
         candidates=format_rerank_candidates(docs),
     )
 
     try:
-        raw_response = reranker_llm.invoke(prompt).content
+        raw_response = get_reranker_llm().invoke(prompt).content
         payload = _safe_json_load(raw_response)
         if payload is None:
             return docs[:final_k]
@@ -361,8 +367,7 @@ def retrieve_by_similarity(
     k: int,
     score_threshold: float,
 ) -> list[Document]:
-    vector_store = load_vector_store()
-    docs_with_scores = vector_store.similarity_search_with_score(question, k=k)
+    docs_with_scores = VECTOR_STORE.similarity_search_with_score(question, k=k)
     return filter_by_score(docs_with_scores, score_threshold=score_threshold)
 
 
@@ -373,8 +378,7 @@ def retrieve_by_mmr(
     fetch_k: int,
     lambda_mult: float,
 ) -> list[Document]:
-    vector_store = load_vector_store()
-    return vector_store.max_marginal_relevance_search(
+    return VECTOR_STORE.max_marginal_relevance_search(
         question,
         k=k,
         fetch_k=fetch_k,
@@ -398,9 +402,8 @@ def answer_with_retrieval(
     context = format_context(retrieved_docs)
     sources = build_sources_map(retrieved_docs)
 
-    llm = ChatOllama(model="llama3.2:3b", temperature=0)
     prompt = prompt_template.format(context=context, question=question)
-    response = llm.invoke(prompt)
+    response = get_answer_llm().invoke(prompt)
     answer = response.content.strip()
 
     if strict_citation and not validate_citations(answer, sources):
@@ -430,9 +433,8 @@ def ask_question(question: str) -> dict[str, Any]:
     query_type = routing["query_type"]
 
     if query_type == "CONVERSATION":
-        llm = ChatOllama(model="llama3.2:3b", temperature=0.2)
         prompt = CONVERSATION_PROMPT_TEMPLATE.format(question=question)
-        response = llm.invoke(prompt)
+        response = get_conversation_llm().invoke(prompt)
         return {
             "answer": response.content.strip(),
             "sources": {},

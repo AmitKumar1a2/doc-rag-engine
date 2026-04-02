@@ -29,6 +29,7 @@ The pipeline was upgraded with minimal, production-style changes:
 - MMR-based retrieval for summary questions to improve context diversity
 - No-answer fallback when retrieval quality is weak
 - Structured source mapping in output
+- Stage-wise model configuration through environment variables
 - CLI updated to print routing metadata and citation mappings clearly
 - Streamlit UI added for PDF upload, querying, and answer history
 
@@ -69,6 +70,7 @@ doc-rag-engine/
 |-- vector_store/                     # Generated FAISS index files
 |-- src/
 |   |-- ingest.py                     # PDF loading + chunking
+|   |-- model_config.py               # Stage-wise model and embedding configuration
 |   |-- retriever.py                  # FAISS build/load
 |   |-- rag_pipeline.py               # Query routing + retrieval + prompt + answer generation
 |   `-- cli_chat.py                   # Interactive CLI
@@ -85,9 +87,14 @@ doc-rag-engine/
 - Converts pages to LangChain `Document` objects
 - Splits documents with `RecursiveCharacterTextSplitter`
 
+### `src/model_config.py`
+- Centralizes model selection for classifier, reranker, answer, conversation, and embeddings
+- Reads stage-specific model names and temperatures from environment variables
+- Builds cached `ChatOllama` / `OllamaEmbeddings` clients so each stage can be swapped independently
+
 ### `src/retriever.py`
 - Builds FAISS from chunked documents
-- Uses `nomic-embed-text` via `OllamaEmbeddings`
+- Uses the configured embedding model via `OllamaEmbeddings`
 - Saves index to `vector_store/`
 - Loads index for query-time retrieval
 
@@ -150,6 +157,33 @@ py -3.11 -m venv rag_env311
 python -m pip install -r requirements.txt
 ```
 
+## Model Configuration
+
+Model choices are stage-wise configurable through environment variables.
+If a variable is not set, the current default is used.
+
+```powershell
+$env:RAG_EMBEDDING_MODEL = "nomic-embed-text"
+
+$env:RAG_CLASSIFIER_MODEL = "phi3:mini"
+$env:RAG_CLASSIFIER_TEMPERATURE = "0"
+
+$env:RAG_RERANKER_MODEL = "phi3:mini"
+$env:RAG_RERANKER_TEMPERATURE = "0"
+
+$env:RAG_ANSWER_MODEL = "llama3.2:3b"
+$env:RAG_ANSWER_TEMPERATURE = "0"
+
+$env:RAG_CONVERSATION_MODEL = "llama3.2:3b"
+$env:RAG_CONVERSATION_TEMPERATURE = "0.2"
+```
+
+You can also place the same keys in a local `.env` file.
+
+Important:
+- If you change `RAG_EMBEDDING_MODEL`, rebuild the FAISS index with `python src\retriever.py`
+- For low-latency experiments, try smaller models at `RAG_CLASSIFIER_MODEL`, `RAG_RERANKER_MODEL`, or `RAG_ANSWER_MODEL` independently
+
 ## How To Use
 
 ### 1) Build/refresh vector index
@@ -181,11 +215,13 @@ python -m streamlit run streamlit_app.py
 ## Notes
 
 - Rebuild vector store whenever source PDFs change
+- Rebuild vector store whenever `RAG_EMBEDDING_MODEL` changes
 - Keep Ollama running while indexing/chatting
 - Tune chunk size or score threshold to balance recall and precision
-- `phi3:mini` is used for query classification
-- `phi3:mini` is also used for fact-lookup reranking
-- `llama3.2:3b` is used for answer generation
+- Default query classification model: `phi3:mini`
+- Default fact reranking model: `phi3:mini`
+- Default answer and conversation model: `llama3.2:3b`
+- Default embedding model: `nomic-embed-text`
 - Fact lookup uses reranking after initial similarity retrieval
 - Summary queries use MMR retrieval with diversified chunk selection
 
